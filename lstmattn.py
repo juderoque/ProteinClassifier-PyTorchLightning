@@ -144,7 +144,9 @@ class LSTMAttn(pl.LightningModule):
             mlm_loss = 0.0
 
         loss = (self.cls_weight * cls_loss + self.mlm_weight * mlm_loss) / (self.cls_weight + self.mlm_weight)
-        return {'loss': loss}
+        log = {'loss': loss}
+        self.logger.experiment.log(log)
+        return log
 
     def validation_step(self, batch, batch_idx):
 
@@ -171,7 +173,9 @@ class LSTMAttn(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         mlm_acc = torch.stack([x['mlm_acc'] for x in outputs]).mean()
         cls_acc = torch.stack([x['cls_acc'] for x in outputs]).mean()
+
         log = {'mlm_acc': mlm_acc, 'cls_acc': cls_acc}
+        self.logger.experiment.log(log)
         return {'log': log}
 
     def configure_optimizers(self):
@@ -200,7 +204,8 @@ if __name__ == '__main__':
     train_loader = dataset.get_train_loader(batch_size=args.batch_size)
     val_loader = dataset.get_val_loader(batch_size=args.batch_size)
 
-    trainer = pl.Trainer(max_epochs=1, logger=wandb_logger)
+    #trainer = pl.Trainer(max_epochs=1, logger=wandb_logger)
+    trainer = pl.Trainer(fast_dev_run=True, logger=wandb_logger)
     trainer.fit(model, train_dataloader=train_loader, val_dataloaders=val_loader)
 
 
