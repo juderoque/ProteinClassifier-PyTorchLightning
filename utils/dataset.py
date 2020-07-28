@@ -42,18 +42,25 @@ def create_mask(sequence, padding, mask_ratio):
 class PfamPartition(Dataset):
     def __init__(self, data, fams, vocab, padding, fam_vocab, mask_ratio):
         partition = data[data["family_id"].isin(fams)]
-        x_raw = partition['aligned_sequence'].values
-        y_raw = partition['family_id'].values
-        self.x_data = torch.tensor([prepare_sequence(x, vocab, padding) for x in x_raw])
-        self.mask = torch.tensor([create_mask(x, padding, mask_ratio) for x in x_raw])
-        self.y_data = torch.tensor([fam_vocab[y] for y in y_raw])
-        self.length = self.x_data.shape[0]
+        self.vocab = vocab
+        self.padding = padding
+        self.fam_vocab = fam_vocab
+        self.mask_ratio = mask_ratio
+        self.x_raw = partition['aligned_sequence'].values
+        self.y_raw = partition['family_id'].values
+        #self.x_data = torch.tensor([prepare_sequence(x, vocab, padding) for x in x_raw])
+        #self.mask = torch.tensor([create_mask(x, padding, mask_ratio) for x in x_raw])
+        #self.y_data = torch.tensor([fam_vocab[y] for y in y_raw])
+        self.length = self.x_raw.shape[0]
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, idx):
-        return self.x_data[idx], self.y_data[idx], self.mask[idx]
+        x_data = torch.tensor(prepare_sequence(self.x_raw[idx], self.vocab, self.padding))
+        y_data = torch.tensor(self.fam_vocab[self.y_raw[idx]])
+        mask = torch.tensor(create_mask(self.x_raw[idx], self.padding, self.mask_ratio))
+        return x_data, y_data, mask
 
 
 class PfamDataset:
@@ -64,14 +71,14 @@ class PfamDataset:
 
         train = read_all_shards('train', data_dir)
         val = read_all_shards('dev', data_dir)
-        test = read_all_shards('test', data_dir)
+        #test = read_all_shards('test', data_dir)
 
         fams = np.array(train["family_id"].value_counts().index)[::sample_every]
         fam_vocab = {fam: idx for idx, fam in enumerate(fams)}
 
         self.train_set = PfamPartition(train, fams, self.vocab, padding, fam_vocab, mask_ratio)
         self.val_set = PfamPartition(val, fams, self.vocab, padding, fam_vocab, mask_ratio)
-        self.test_set = PfamPartition(test, fams, self.vocab, padding, fam_vocab, mask_ratio)
+        #self.test_set = PfamPartition(test, fams, self.vocab, padding, fam_vocab, mask_ratio)
 
         self.target_size = len(fams)
 
@@ -81,8 +88,8 @@ class PfamDataset:
     def get_val_loader(self, batch_size=128, shuffle=False, num_workers=cpu_count()):
         return DataLoader(self.val_set, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
 
-    def get_test_loader(self, batch_size=128, shuffle=False, num_workers=cpu_count()):
-        return DataLoader(self.test_set, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+    #def get_test_loader(self, batch_size=128, shuffle=False, num_workers=cpu_count()):
+        #return DataLoader(self.test_set, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,9 @@ class LSTMAttn(pl.LightningModule):
         self.mlm_weight = mlm_weight
 
         self.word_embeddings = nn.Embedding(self.vocab_size, embedding_dim, padding_idx=padding_idx)
+        
+        self.class_loss_function = nn.NLLLoss()
+        self.lm_loss_function = nn.NLLLoss(ignore_index=0)
 
         if need_pos_enc:
             self.position_enc = PositionalEncoding(embedding_dim, n_position=seq_len)
@@ -122,14 +125,11 @@ class LSTMAttn(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
 
-        class_loss_function = nn.NLLLoss()
-        lm_loss_function = nn.NLLLoss(ignore_index=0)
-
         x, target, token_mask = batch
         tag_scores, mlm_scores = self(x, token_mask)
         # analyze the loss
         if self.cls_weight:
-            cls_loss = class_loss_function(tag_scores, target)
+            cls_loss = self.class_loss_function(tag_scores, target)
         else:
             cls_loss = 0.0
 
@@ -139,7 +139,7 @@ class LSTMAttn(pl.LightningModule):
         # the content within the mask
         if self.mlm_weight:
             x_mask = x.masked_fill(token_mask == 1, 0)
-            mlm_loss = lm_loss_function(mlm_scores, x_mask)
+            mlm_loss = self.lm_loss_function(mlm_scores, x_mask)
         else:
             mlm_loss = 0.0
 
@@ -151,30 +151,45 @@ class LSTMAttn(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
 
         x, target, token_mask = batch
-        target = target.numpy()
         score_pred, mlm_pred = model(x)
+        
+        if self.cls_weight:
+            cls_loss = self.class_loss_function(score_pred, target)
+        else:
+            cls_loss = 0.0
 
-        if score_pred is not None:
-            cls_pred_fold = np.array(torch.max(score_pred, 1)[1].tolist())
-            cls_acc = sum(target == cls_pred_fold) / len(target)
+        if self.mlm_weight:
+            x_mask = x.masked_fill(token_mask == 1, 0)
+            mlm_loss = self.lm_loss_function(mlm_pred, x_mask)
+        else:
+            mlm_loss = 0.0
+            
+        loss = (self.cls_weight * cls_loss + self.mlm_weight * mlm_loss) / (self.cls_weight + self.mlm_weight)
 
-        if mlm_pred is not None:
-            mlm_pred_fold = torch.max(mlm_pred, 1)[1]
+        #if score_pred is not None:
+            #cls_pred_fold = np.array(torch.max(score_pred, 1)[1].tolist())
+            #cls_acc = sum(target == cls_pred_fold) / len(target)
+
+        #if mlm_pred is not None:
+            #mlm_pred_fold = torch.max(mlm_pred, 1)[1]
             # this is the compare result
-            mlm_comp_res = mlm_pred_fold == x
+            #mlm_comp_res = mlm_pred_fold == x
             # this is where we care, we will set these position to be 1
-            care_part = token_mask == 0
-            mlm_masked_res = mlm_comp_res & care_part
+            #care_part = token_mask == 0
+            #mlm_masked_res = mlm_comp_res & care_part
 
-            mlm_acc = np.sum(mlm_masked_res.tolist()) / np.sum(care_part.tolist())
+            #mlm_acc = np.sum(mlm_masked_res.tolist()) / np.sum(care_part.tolist())
 
-        return {'mlm_acc': torch.tensor(mlm_acc or 0, dtype=torch.float64), 'cls_acc': torch.tensor(cls_acc or 0, dtype=torch.float64)}
+        #return {'mlm_acc': torch.tensor(mlm_acc or 0, dtype=torch.float64), 'cls_acc': torch.tensor(cls_acc or 0, dtype=torch.float64), 'val_loss': loss}
+        return {'val_loss': loss}
 
     def validation_epoch_end(self, outputs):
-        mlm_acc = torch.stack([x['mlm_acc'] for x in outputs]).mean()
-        cls_acc = torch.stack([x['cls_acc'] for x in outputs]).mean()
+        #mlm_acc = torch.stack([x['mlm_acc'] for x in outputs]).mean()
+        #cls_acc = torch.stack([x['cls_acc'] for x in outputs]).mean()
+        
+        val_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
 
-        log = {'mlm_acc': mlm_acc, 'cls_acc': cls_acc}
+        log = {'val_loss': val_loss} #, 'mlm_acc': mlm_acc, 'cls_acc': cls_acc}
         self.logger.experiment.log(log)
         return {'log': log}
 
@@ -186,6 +201,18 @@ if __name__ == '__main__':
     from utils.dataset import PfamDataset
     import argparse
     from pytorch_lightning.loggers import WandbLogger
+    from pytorch_lightning.callbacks import ModelCheckpoint
+    from test_tube import Experiment
+
+    #exp = Experiment(version='3airf7c8')
+
+    checkpoint_callback = ModelCheckpoint(
+        filepath='checkpoints/trial.ckpt',
+        verbose=True,
+        monitor='val_loss',
+        save_top_k=5,
+        mode='min'
+    )
 
     wandb_logger = WandbLogger(name='Trial', project='lstm-lightning')
 
@@ -195,7 +222,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     data_dir = 'data/random_split'
-    sample_every = 100
+    sample_every = 1
     padding = 3000
 
     dataset = PfamDataset(data_dir, sample_every, padding)
@@ -203,9 +230,8 @@ if __name__ == '__main__':
 
     train_loader = dataset.get_train_loader(batch_size=args.batch_size)
     val_loader = dataset.get_val_loader(batch_size=args.batch_size)
-
-    #trainer = pl.Trainer(max_epochs=1, logger=wandb_logger)
-    trainer = pl.Trainer(fast_dev_run=True, logger=wandb_logger)
+    
+    trainer = pl.Trainer(max_epochs=20, logger=wandb_logger, val_check_interval=0.10, val_percent_check=0.1, gpus=[0], checkpoint_callback=checkpoint_callback, resume_from_checkpoint='checkpoints/_ckpt_epoch_1.ckpt')#, fast_dev_run=True) 
     trainer.fit(model, train_dataloader=train_loader, val_dataloaders=val_loader)
 
 
